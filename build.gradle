@@ -1,0 +1,154 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group 'org.example'
+version '1.0.0'
+
+repositories {
+    mavenCentral()
+    gradlePluginPortal()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+def mainClassName = 'com.sunnyslopes.noslimefinder.NoSlimeFinderFrame'
+
+jar {
+    archiveBaseName.set('NoSlimeFinder')
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Multi-Release': 'true'
+    }
+}
+
+shadowJar {
+    archiveBaseName.set('NoSlimeFinder')
+    archiveClassifier.set('')
+    mergeServiceFiles()
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Multi-Release': 'true'
+    }
+}
+
+tasks.register('buildMainJar', ShadowJar) {
+    group = 'build'
+    description = 'Creates the executable NoSlimeFinder fat JAR'
+    archiveBaseName.set('NoSlimeFinder')
+    archiveClassifier.set('')
+    from sourceSets.main.output
+    configurations = [project.configurations.runtimeClasspath]
+    manifest {
+        attributes 'Main-Class': mainClassName
+        attributes 'Multi-Release': 'true'
+    }
+    mergeServiceFiles()
+    exclude 'module-info.class'
+}
+
+tasks.register('buildAllJars') {
+    group = 'build'
+    description = 'Builds all executable JARs'
+    dependsOn buildMainJar
+}
+
+def generatedNativeResourcesDir = layout.buildDirectory.dir('generated/native-resources')
+def windowsDll = file('native/windows/libNoSlimeFinderLibJ.dll')
+def jniBat = file('jni/build-jni.bat')
+
+tasks.register('buildNativeWindows', Exec) {
+    group = 'build'
+    description = 'Builds libNoSlimeFinderLibJ.dll via jni/build-jni.bat'
+    workingDir = file('jni')
+    commandLine 'cmd', '/c', 'build-jni.bat'
+    def runningJavaHome = System.getProperty('java.home')
+    if (file("${runningJavaHome}/include/jni.h").exists()) {
+        environment 'JAVA_HOME', runningJavaHome
+    }
+    onlyIf {
+        System.getProperty('os.name').toLowerCase().contains('windows') && jniBat.exists()
+    }
+    inputs.files(
+        fileTree('jni') {
+            include 'NoSlimeSearch.cpp', 'NoSlimeSearch.h',
+                    'build-jni.bat',
+                    'cxx_compat/*.h',
+                    'native/jni/**/*.cpp', 'native/jni/**/*.h',
+                    'slimeoptimizer/include/**/*.hpp',
+                    'slimeoptimizer/src/geometry.cpp',
+                    'slimeoptimizer/src/slime_check.cpp',
+                    'slimeoptimizer/src/java_random.cpp',
+                    'cubiomes/generator.{c,h}', 'cubiomes/layers.{c,h}',
+                    'cubiomes/biomenoise.{c,h}', 'cubiomes/biomes.{c,h}',
+                    'cubiomes/noise.{c,h}', 'cubiomes/util.{c,h}',
+                    'cubiomes/rng.h', 'cubiomes/xrms.h', 'cubiomes/tables/*.h'
+        }
+    )
+    outputs.file(windowsDll)
+}
+
+tasks.register('prepareNativeResources') {
+    group = 'build'
+    description = 'Collects prebuilt dll/so/dylib from native/ into jar resources'
+    dependsOn tasks.named('buildNativeWindows')
+    inputs.files(windowsDll)
+    outputs.dir(generatedNativeResourcesDir)
+    doLast {
+        def outDir = generatedNativeResourcesDir.get().asFile
+        delete(outDir)
+        outDir.mkdirs()
+
+        def windowsDir = file('native/windows')
+        def linuxDir = file('native/linux')
+        def macosDir = file('native/macos')
+
+        if (!windowsDll.exists()) {
+            throw new GradleException(
+                'Missing native/windows/libNoSlimeFinderLibJ.dll. ' +
+                'Run jni/build-jni.bat (uses jni/cubiomes and jni/slimeoptimizer).')
+        }
+
+        copy {
+            from(windowsDir)
+            include('*.dll')
+            into(new File(outDir, 'native/windows'))
+        }
+        if (linuxDir.exists()) {
+            copy {
+                from(linuxDir)
+                include('*.so')
+                into(new File(outDir, 'native/linux'))
+            }
+        }
+        if (macosDir.exists()) {
+            copy {
+                from(macosDir)
+                include('*.dylib')
+                into(new File(outDir, 'native/macos'))
+            }
+        }
+    }
+}
+
+tasks.named('processResources') {
+    dependsOn tasks.named('prepareNativeResources')
+    from(generatedNativeResourcesDir)
+}
+
+tasks.named('buildMainJar') {
+    dependsOn tasks.named('prepareNativeResources')
+}

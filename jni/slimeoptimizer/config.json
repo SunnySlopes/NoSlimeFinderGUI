@@ -1,0 +1,8 @@
+{
+  "seed": 0,
+  "chunkSearchRange": 20,
+  "playerSearchRange": 5,
+  "innerRadius": 24,
+  "outerRadius": 128,
+  "outDir": "output"
+}
