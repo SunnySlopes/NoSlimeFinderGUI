@@ -35,6 +35,17 @@ jar {
     }
 }
 
+// Bundle the license texts so every distributed JAR carries the required notices.
+tasks.withType(Jar).configureEach {
+    from('LICENSE') {
+        into 'META-INF'
+    }
+    from('jni/cubiomes/LICENSE') {
+        into 'META-INF/licenses'
+        rename { 'cubiomes-LICENSE.txt' }
+    }
+}
+
 shadowJar {
     archiveBaseName.set('NoSlimeFinder')
     archiveClassifier.set('')

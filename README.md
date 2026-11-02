@@ -216,3 +216,25 @@ Fixed pipeline (no fast-mode checkbox):
 - The prefilter keeps only 1,000 candidate cells and the 1x1 stage only the top 200; both are heuristic and may miss the true optimum.
 - Final results are deduplicated by 64×64 neighborhood, so near-identical points across cell boundaries are removed; fewer than 100 results may remain.
 - The "≤10 slime chunks in the 192-chunk donut" rule is a heuristic; with a 10% slime rate the expected count is about 19, so ≤10 is a notably low-slime region, but a 11+ region with slimes concentrated at the ring edge can be missed.
+
+## 许可证 / License
+
+本项目以 **MIT 许可证**发布，完整文本见 [LICENSE](LICENSE)。
+
+This project is released under the **MIT License**. See [LICENSE](LICENSE) for the full text.
+
+```text
+MIT License
+
+Copyright (c) 2026 SunnySlopes
+```
+
+第三方组件保留各自原有的许可 / Third-party components keep their own licenses:
+
+- `jni/cubiomes` — MIT, Copyright (c) 2020 Cubitect；许可证见 `jni/cubiomes/LICENSE`。
+- `jni/slimeoptimizer` — 子模块，内容未修改；版权归 CITYWIDESIGN（原仓库未附许可证文件）。
+- 打包进 JAR 的原生库 `libNoSlimeFinderLibJ.dll` 由上述源码构建，随本项目按 MIT 分发；cubiomes 的声明一并收录在 JAR 的 `META-INF/licenses/` 中。
+
+- `jni/cubiomes` — MIT, Copyright (c) 2020 Cubitect; see `jni/cubiomes/LICENSE`.
+- `jni/slimeoptimizer` — unmodified submodule; copyright CITYWIDESIGN (the upstream repository ships no license file).
+- The native library `libNoSlimeFinderLibJ.dll` packaged into the JAR is built from those sources and distributed under MIT together with this project; the cubiomes notice is bundled in the JAR under `META-INF/licenses/`.
