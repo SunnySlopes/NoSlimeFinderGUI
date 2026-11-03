@@ -1,8 +1,3 @@
-[submodule "jni/cubiomes"]
-	path = jni/cubiomes
-	url = https://github.com/xpple/cubiomes.git
-
-[submodule "jni/slimeoptimizer"]
-	path = jni/slimeoptimizer
-	url = https://github.com/CITYWIDESIGN/SlimeOptimizer.git
-	# pinned commit: a923441 (see jni/SLIMEOPTIMIZER_COMMIT.txt)
+[submodule "NoSlimeFinderBase"]
+	path = NoSlimeFinderBase
+	url = https://github.com/SunnySlopes/NoSlimeFinderBase.git

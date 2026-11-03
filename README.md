@@ -6,6 +6,20 @@ A GUI tool for Minecraft: Java Edition that finds **single-player AFK points who
 
 > 设计与验证记录见 [PLAN.md](PLAN.md)。
 
+## 架构 / Architecture
+
+本项目已拆成两个库：
+
+| 库 | 位置 | 内容 |
+| --- | --- | --- |
+| 主库 `NoSlimeFinderGUI` | 本仓库 | Java Swing 界面、搜索线程、JNI 薄桥接 `jni/NoSlimeFinderBridge.cpp` |
+| 计算库 `NoSlimeFinderBase` | git 子模块 `NoSlimeFinderBase/` | 全部 C++ 搜索核心、cubiomes、SlimeOptimizer、公共 C API、独立 CLI |
+
+主库**不包含任何 C++ 计算逻辑**：`jni/NoSlimeFinderBridge.cpp` 只把 Java 方法转发到
+`NoSlimeFinderBase/include/noslimefinder/base.h`。base 可以独立打包成
+`NoSlimeFinderBase-cli.exe`，用 CLI 参数执行，并通过 `--out` 输出 txt 结果；
+Gradle 构建时会把该 exe 与 JNI DLL 一起打进 JAR。
+
 ---
 
 ## 指标 / Metrics
@@ -152,36 +166,47 @@ Fixed pipeline (no fast-mode checkbox):
 
 **Java 17+ is required. / 需要 Java 17+。**
 
-1. 依赖 / Dependencies:
-   - `jni/cubiomes`（已有，保持不变 / unchanged）
-   - `jni/slimeoptimizer`（子模块，固定 commit `a923441`（记录在 `jni/SLIMEOPTIMIZER_COMMIT.txt`），内容未修改 / submodule, unmodified）
-2. 原生库 / Native library:
+1. 初始化子模块：
    ```bat
-   jni\build-jni.bat
+   git submodule update --init --recursive
    ```
-   生成 `native/windows/libNoSlimeFinderLibJ.dll`。
-3. JAR:
+   这会同时初始化 `NoSlimeFinderBase` 以及它内部的 `cubiomes`、`slimeoptimizer`。
+2. 构建 JAR（推荐，会联动构建子模块）：
    ```bat
    gradlew buildMainJar
+   ```
+   `build.gradle` 先校验子模块，再调用 `jni/build-jni.bat`：
+   - 用 base 的 `scripts/build_msys2.ps1` 构建静态库与 CLI；
+   - 薄桥接链接静态库，生成 `native/windows/libNoSlimeFinderLibJ.dll`；
+   - 把 CLI 复制为 `native/windows/NoSlimeFinderBase-cli.exe`；
+   - 两个文件都打进 JAR；子模块缺失或为空时构建直接失败并给出提示。
+3. 也可单独构建原生部分：
+   ```bat
+   jni\build-jni.bat
    ```
 4. 运行 / Run:
    ```bat
    java -jar build\libs\NoSlimeFinder-1.0.0.jar
    ```
+5. 独立 CLI（可选）：
+   ```bat
+   NoSlimeFinderBase\build\bin\NoSlimeFinderBase-cli.exe --seed 0 --square 4096 --out result.txt
+   ```
+   JAR 内也带有同一个可执行文件：`native/windows/NoSlimeFinderBase-cli.exe`。
 
 - 构建链：MSYS2 UCRT64 GCC（`C:\msys64\ucrt64\bin`）+ Gradle wrapper。
-- JNI 库会打进 JAR，运行时解压加载；也可直接使用 `native/windows/libNoSlimeFinderLibJ.dll`。
-- 若修改原生源码，重跑 `jni\build-jni.bat` 并重建 JAR。
+- 只改 Java 时无需重跑原生构建；改 `NoSlimeFinderBase` 源码后重跑 `gradlew buildMainJar` 即可。
+- JNI 库会打进 JAR，运行时解压加载；CLI 会随 JAR 一起打包。
 
 - Toolchain: MSYS2 UCRT64 GCC + Gradle wrapper.
-- The JNI library is packaged into the JAR and extracted at runtime.
-- Re-run `jni\build-jni.bat` and rebuild the JAR after changing native sources.
+- The JNI DLL is packaged into the JAR and extracted at runtime; the base CLI is packaged alongside it.
+- Rebuild with `gradlew buildMainJar` after changing native sources.
 
 ## 核心依赖 / Libraries
 
-- [cubiomes (xpple)](https://github.com/xpple/cubiomes) — biome generation (via `jni/cubiomes`).
-- [SlimeOptimizer (CITYWIDESIGN)](https://github.com/CITYWIDESIGN/SlimeOptimizer) — ring spans and exact slime-chunk test (via `jni/slimeoptimizer`).
-- **SlimeRadar is not linked.** The coarse prefilter imitates its large-tile SAT + 17×17 donut logic, but inverts the objective to low-slime and is implemented directly in `NoSlimeSearch.cpp`.
+- [cubiomes (xpple)](https://github.com/xpple/cubiomes) — biome generation (via `NoSlimeFinderBase/cubiomes`).
+- [SlimeOptimizer (CITYWIDESIGN)](https://github.com/CITYWIDESIGN/SlimeOptimizer) — ring spans and exact slime-chunk test (via `NoSlimeFinderBase/slimeoptimizer`).
+- **SlimeRadar is not linked.** The coarse prefilter imitates its large-tile SAT + 17×17 donut logic, but inverts the objective to low-slime and is implemented directly in `NoSlimeFinderBase/src/noslime_search.cpp`.
 
 - **SlimeRadar is not linked**; only the prefilter idea is imitated.
 
@@ -231,10 +256,10 @@ Copyright (c) 2026 SunnySlopes
 
 第三方组件保留各自原有的许可 / Third-party components keep their own licenses:
 
-- `jni/cubiomes` — MIT, Copyright (c) 2020 Cubitect；许可证见 `jni/cubiomes/LICENSE`。
-- `jni/slimeoptimizer` — 子模块，内容未修改；版权归 CITYWIDESIGN（原仓库未附许可证文件）。
-- 打包进 JAR 的原生库 `libNoSlimeFinderLibJ.dll` 由上述源码构建，随本项目按 MIT 分发；cubiomes 的声明一并收录在 JAR 的 `META-INF/licenses/` 中。
+- `NoSlimeFinderBase/cubiomes` — MIT, Copyright (c) 2020 Cubitect；许可证见 `NoSlimeFinderBase/cubiomes/LICENSE`。
+- `NoSlimeFinderBase/slimeoptimizer` — 子模块，内容未修改；版权归 CITYWIDESIGN（原仓库未附许可证文件）。
+- 打包进 JAR 的原生库 `libNoSlimeFinderLibJ.dll` 与 `NoSlimeFinderBase-cli.exe` 由上述源码构建，随本项目按 MIT 分发；cubiomes 的声明一并收录在 JAR 的 `META-INF/licenses/` 中。
 
-- `jni/cubiomes` — MIT, Copyright (c) 2020 Cubitect; see `jni/cubiomes/LICENSE`.
-- `jni/slimeoptimizer` — unmodified submodule; copyright CITYWIDESIGN (the upstream repository ships no license file).
-- The native library `libNoSlimeFinderLibJ.dll` packaged into the JAR is built from those sources and distributed under MIT together with this project; the cubiomes notice is bundled in the JAR under `META-INF/licenses/`.
+- `NoSlimeFinderBase/cubiomes` — MIT, Copyright (c) 2020 Cubitect; see `NoSlimeFinderBase/cubiomes/LICENSE`.
+- `NoSlimeFinderBase/slimeoptimizer` — unmodified submodule; copyright CITYWIDESIGN (the upstream repository ships no license file).
+- The native library `libNoSlimeFinderLibJ.dll` and the CLI `NoSlimeFinderBase-cli.exe` packaged into the JAR are built from those sources and distributed under MIT together with this project; the cubiomes notice is bundled in the JAR under `META-INF/licenses/`.

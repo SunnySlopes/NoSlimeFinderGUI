@@ -10,7 +10,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/** JNI bridge to the NoSlimeFinder native library. */
+/** JNI facade over the NoSlimeFinderBase native library. */
 public final class NoSlimeFinderBridge {
 
     private static boolean loaded = false;
@@ -34,7 +34,6 @@ public final class NoSlimeFinderBridge {
             List<String> names = nativeLibNames();
             Path[] candidates = {
                 base.resolve("native").resolve("windows"),
-                base.resolve("jni").resolve("native").resolve("jni").resolve("build").resolve("native"),
                 base.resolve("build").resolve("libs").resolve("native").resolve("windows"),
             };
             for (Path dir : candidates) {
@@ -48,7 +47,8 @@ public final class NoSlimeFinderBridge {
                 }
             }
             throw new UnsatisfiedLinkError(
-                "NoSlimeFinder native library not found. Build with jni/build-jni.bat. "
+                "NoSlimeFinder native library not found. Initialize the NoSlimeFinderBase "
+                + "submodule and build with jni/build-jni.bat. "
                 + first.getMessage());
         }
     }

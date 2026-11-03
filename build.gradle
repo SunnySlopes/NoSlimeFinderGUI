@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 SunnySlopes
+
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
@@ -27,6 +30,84 @@ tasks.withType(JavaCompile).configureEach {
 
 def mainClassName = 'com.sunnyslopes.noslimefinder.NoSlimeFinderFrame'
 
+// ---------------------------------------------------------------------------
+// NoSlimeFinderBase submodule contract
+//
+// The native search code lives in the `NoSlimeFinderBase` git submodule
+// (https://github.com/SunnySlopes/NoSlimeFinderBase). The main project only
+// keeps a thin JNI shim (jni/NoSlimeFinderBridge.cpp) that calls the base C
+// API from include/noslimefinder/base.h.
+//
+// Gradle builds the base static library + standalone CLI through the base
+// repository's script, then links the thin shim against the static library and
+// packages both the JNI DLL and the base CLI executable into the JAR. When the
+// submodule (or its nested cubiomes/slimeoptimizer submodules) is missing the
+// build fails with an explicit instruction instead of producing a broken JAR.
+// ---------------------------------------------------------------------------
+def baseDir = file('NoSlimeFinderBase')
+def baseHeader = new File(baseDir, 'include/noslimefinder/base.h')
+def baseScript = new File(baseDir, 'scripts/build_msys2.ps1')
+def baseLib = new File(baseDir, 'build/lib/libnoslimefinderbase.a')
+def baseCli = new File(baseDir, 'build/bin/NoSlimeFinderBase-cli.exe')
+def windowsDll = file('native/windows/libNoSlimeFinderLibJ.dll')
+def bundledBaseCli = file('native/windows/NoSlimeFinderBase-cli.exe')
+def jniBat = file('jni/build-jni.bat')
+
+def baseSubmoduleProblems = {
+    def problems = []
+    if (!baseHeader.exists()) {
+        problems << "missing ${baseHeader} (NoSlimeFinderBase submodule not checked out)"
+    }
+    if (!new File(baseDir, 'cubiomes/generator.c').exists()) {
+        problems << "missing ${baseDir}/cubiomes/generator.c (nested cubiomes submodule not initialized)"
+    }
+    if (!new File(baseDir, 'slimeoptimizer/src/slime_check.cpp').exists()) {
+        problems << "missing ${baseDir}/slimeoptimizer/src/slime_check.cpp (nested slimeoptimizer submodule not initialized)"
+    }
+    if (!baseScript.exists()) {
+        problems << "missing ${baseScript} (NoSlimeFinderBase build script not checked out)"
+    }
+    return problems
+}
+
+def requireBaseSubmodule = {
+    def problems = baseSubmoduleProblems()
+    if (!problems.isEmpty()) {
+        throw new GradleException(
+            "NoSlimeFinderBase submodule is not ready:\n  - " + problems.join("\n  - ") +
+            "\n\nInitialize it with:\n  git submodule update --init --recursive")
+    }
+}
+
+tasks.register('verifyBaseSubmodule') {
+    group = 'build'
+    description = 'Checks that NoSlimeFinderBase and its nested submodules are checked out'
+    doLast { requireBaseSubmodule() }
+}
+
+// Standalone convenience task: build the base static library + CLI directly.
+// The JAR build does not depend on this task because jni/build-jni.bat invokes
+// the same base script as part of the native build.
+tasks.register('buildBaseCli', Exec) {
+    group = 'build'
+    description = 'Builds the NoSlimeFinderBase static library and NoSlimeFinderBase-cli.exe'
+    dependsOn 'verifyBaseSubmodule'
+    workingDir = baseDir
+    commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', baseScript.absolutePath
+    inputs.files(fileTree(baseDir) {
+        include 'src/**', 'include/**', 'scripts/**', 'cxx_compat/**', 'CMakeLists.txt'
+    })
+    inputs.files(fileTree(new File(baseDir, 'cubiomes')) { include '*.c', '*.h' })
+    inputs.files(fileTree(new File(baseDir, 'slimeoptimizer')) {
+        include 'src/*.cpp', 'include/*.hpp'
+    })
+    outputs.files(baseLib, baseCli)
+}
+
+// ---------------------------------------------------------------------------
+// JARs
+// ---------------------------------------------------------------------------
 jar {
     archiveBaseName.set('NoSlimeFinder')
     manifest {
@@ -35,12 +116,16 @@ jar {
     }
 }
 
-// Bundle the license texts so every distributed JAR carries the required notices.
+// Bundle license texts so every distributed JAR carries the required notices.
 tasks.withType(Jar).configureEach {
     from('LICENSE') {
         into 'META-INF'
     }
-    from('jni/cubiomes/LICENSE') {
+    from(new File(baseDir, 'LICENSE')) {
+        into 'META-INF/licenses'
+        rename { 'NoSlimeFinderBase-LICENSE.txt' }
+    }
+    from(new File(baseDir, 'cubiomes/LICENSE')) {
         into 'META-INF/licenses'
         rename { 'cubiomes-LICENSE.txt' }
     }
@@ -77,15 +162,16 @@ tasks.register('buildAllJars') {
     dependsOn buildMainJar
 }
 
-def generatedNativeResourcesDir = layout.buildDirectory.dir('generated/native-resources')
-def windowsDll = file('native/windows/libNoSlimeFinderLibJ.dll')
-def jniBat = file('jni/build-jni.bat')
-
+// ---------------------------------------------------------------------------
+// Native build: base library + CLI, then the thin JNI DLL.
+// ---------------------------------------------------------------------------
 tasks.register('buildNativeWindows', Exec) {
     group = 'build'
-    description = 'Builds libNoSlimeFinderLibJ.dll via jni/build-jni.bat'
+    description = 'Builds the NoSlimeFinderBase library/CLI and libNoSlimeFinderLibJ.dll'
+    dependsOn 'verifyBaseSubmodule'
     workingDir = file('jni')
     commandLine 'cmd', '/c', 'build-jni.bat'
+
     def runningJavaHome = System.getProperty('java.home')
     if (file("${runningJavaHome}/include/jni.h").exists()) {
         environment 'JAVA_HOME', runningJavaHome
@@ -93,64 +179,48 @@ tasks.register('buildNativeWindows', Exec) {
     onlyIf {
         System.getProperty('os.name').toLowerCase().contains('windows') && jniBat.exists()
     }
-    inputs.files(
-        fileTree('jni') {
-            include 'NoSlimeSearch.cpp', 'NoSlimeSearch.h',
-                    'build-jni.bat',
-                    'cxx_compat/*.h',
-                    'native/jni/**/*.cpp', 'native/jni/**/*.h',
-                    'slimeoptimizer/include/**/*.hpp',
-                    'slimeoptimizer/src/geometry.cpp',
-                    'slimeoptimizer/src/slime_check.cpp',
-                    'slimeoptimizer/src/java_random.cpp',
-                    'cubiomes/generator.{c,h}', 'cubiomes/layers.{c,h}',
-                    'cubiomes/biomenoise.{c,h}', 'cubiomes/biomes.{c,h}',
-                    'cubiomes/noise.{c,h}', 'cubiomes/util.{c,h}',
-                    'cubiomes/rng.h', 'cubiomes/xrms.h', 'cubiomes/tables/*.h'
-        }
-    )
-    outputs.file(windowsDll)
+
+    inputs.files(fileTree('jni') {
+        include 'build-jni.bat', 'NoSlimeFinderBridge.cpp', 'NoSlimeFinderBridge.h'
+    })
+    inputs.files(fileTree(baseDir) {
+        include 'src/**', 'include/**', 'scripts/**', 'cxx_compat/**', 'CMakeLists.txt'
+    })
+    inputs.files(fileTree(new File(baseDir, 'cubiomes')) {
+        include '*.c', '*.h', 'tables/*.h'
+    })
+    inputs.files(fileTree(new File(baseDir, 'slimeoptimizer')) {
+        include 'src/*.cpp', 'include/*.hpp'
+    })
+    outputs.files(windowsDll, bundledBaseCli)
 }
+
+def generatedNativeResourcesDir = layout.buildDirectory.dir('generated/native-resources')
 
 tasks.register('prepareNativeResources') {
     group = 'build'
-    description = 'Collects prebuilt dll/so/dylib from native/ into jar resources'
+    description = 'Collects the JNI DLL and the base CLI executable into JAR resources'
     dependsOn tasks.named('buildNativeWindows')
-    inputs.files(windowsDll)
+    inputs.files(windowsDll, bundledBaseCli)
     outputs.dir(generatedNativeResourcesDir)
     doLast {
-        def outDir = generatedNativeResourcesDir.get().asFile
-        delete(outDir)
-        outDir.mkdirs()
-
-        def windowsDir = file('native/windows')
-        def linuxDir = file('native/linux')
-        def macosDir = file('native/macos')
-
         if (!windowsDll.exists()) {
             throw new GradleException(
                 'Missing native/windows/libNoSlimeFinderLibJ.dll. ' +
-                'Run jni/build-jni.bat (uses jni/cubiomes and jni/slimeoptimizer).')
+                'Run jni/build-jni.bat (it builds the NoSlimeFinderBase submodule first).')
         }
-
+        if (!bundledBaseCli.exists()) {
+            throw new GradleException(
+                'Missing native/windows/NoSlimeFinderBase-cli.exe. ' +
+                'Run jni/build-jni.bat (it builds the NoSlimeFinderBase CLI first).')
+        }
+        def outDir = generatedNativeResourcesDir.get().asFile
+        delete(outDir)
+        outDir.mkdirs()
         copy {
-            from(windowsDir)
-            include('*.dll')
+            from('native/windows')
+            include '*.dll', 'NoSlimeFinderBase-cli.exe'
             into(new File(outDir, 'native/windows'))
-        }
-        if (linuxDir.exists()) {
-            copy {
-                from(linuxDir)
-                include('*.so')
-                into(new File(outDir, 'native/linux'))
-            }
-        }
-        if (macosDir.exists()) {
-            copy {
-                from(macosDir)
-                include('*.dylib')
-                into(new File(outDir, 'native/macos'))
-            }
         }
     }
 }

@@ -1,63 +1,95 @@
 @echo off
+rem SPDX-License-Identifier: MIT
+rem Copyright (c) 2026 SunnySlopes
+rem ---------------------------------------------------------------------------
+rem Builds libNoSlimeFinderLibJ.dll (thin JNI shim) and packages the
+rem NoSlimeFinderBase CLI next to it.
+rem
+rem The NoSlimeFinderBase git submodule provides:
+rem   - build\lib\libnoslimefinderbase.a   search core + cubiomes + SlimeOptimizer
+rem   - build\bin\NoSlimeFinderBase-cli.exe standalone CLI
+rem
+rem Layout required:
+rem   NoSlimeFinderGUI\
+rem     jni\build-jni.bat            (this file)
+rem     jni\NoSlimeFinderBridge.cpp  (thin JNI shim, no search logic)
+rem     NoSlimeFinderBase\           (git submodule)
+rem
+rem Outputs:
+rem   native\windows\libNoSlimeFinderLibJ.dll
+rem   native\windows\NoSlimeFinderBase-cli.exe
+rem ---------------------------------------------------------------------------
 setlocal EnableExtensions EnableDelayedExpansion
 set MASTER=%~dp0
 call :resolve_java_home
 if errorlevel 1 exit /b 1
-set PATH=C:\msys64\ucrt64\bin;%PATH%
-set CUB=%MASTER%cubiomes
-set OPT=%MASTER%slimeoptimizer
-set OUT=%MASTER%native\jni\build\native
-set RF=%MASTER%..\native
 
-if not exist "%CUB%\noise.c" (
-  echo ERROR: cubiomes not found at:
-  echo   %CUB%
-  echo Init the submodule: git submodule update --init jni/cubiomes
+set BASE=%MASTER%..\NoSlimeFinderBase
+set OUT=%MASTER%..\native\windows
+set BJ=%MASTER%build
+
+if not exist "%BASE%\include\noslimefinder\base.h" (
+  echo ERROR: NoSlimeFinderBase submodule not found at:
+  echo   %BASE%
+  echo Initialize it first:
+  echo   git submodule update --init --recursive
   exit /b 1
 )
-if not exist "%OPT%\src\slime_check.cpp" (
-  echo ERROR: slimeoptimizer not found at:
-  echo   %OPT%
+if not exist "%BASE%\cubiomes\generator.c" (
+  echo ERROR: base submodule cubiomes is empty:
+  echo   %BASE%\cubiomes
+  echo   git -C "%BASE%" submodule update --init --recursive
   exit /b 1
 )
+if not exist "%BASE%\slimeoptimizer\src\slime_check.cpp" (
+  echo ERROR: base submodule slimeoptimizer is empty:
+  echo   %BASE%\slimeoptimizer
+  echo   git -C "%BASE%" submodule update --init --recursive
+  exit /b 1
+)
+
+echo [jni] building NoSlimeFinderBase via scripts\build_msys2.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%BASE%\scripts\build_msys2.ps1"
+if errorlevel 1 exit /b 1
 
 mkdir "%OUT%" 2>nul
-mkdir "%RF%\windows" 2>nul
-cd /d "%MASTER%"
+mkdir "%BJ%" 2>nul
+
+rem Same MSYS2 discovery as NoSlimeFinderBase/scripts/build_msys2.ps1.
+set MSYS=%MSYS2_ROOT%
+if "%MSYS%"=="" set MSYS=C:\msys64
+set MSYS_MINGW=%MSYS2_MINGW%
+if "%MSYS_MINGW%"=="" (
+  if exist "%MSYS%\ucrt64\bin\g++.exe" (
+    set MSYS_MINGW=ucrt64
+  ) else (
+    set MSYS_MINGW=mingw64
+  )
+)
+if not exist "%MSYS%\%MSYS_MINGW%\bin\g++.exe" (
+  echo ERROR: g++ not found under %MSYS%\%MSYS_MINGW%\bin
+  echo Set MSYS2_ROOT / MSYS2_MINGW or install the MSYS2 UCRT64 toolchain.
+  exit /b 1
+)
+set PATH=%MSYS%\%MSYS_MINGW%\bin;%PATH%
 
 set INC=%JAVA_HOME%\include
 set INCW=%JAVA_HOME%\include\win32
-rem -I. so #include "cubiomes/..." resolves to jni/cubiomes
-set CDEF=-DNDEBUG -D_WIN32 -DNOSLIME_FINDER_JNI_LIB -I. -I"%INC%" -I"%INCW%"
-rem pre_cubiomes.h avoids C++20 std::lerp clash without copying cubiomes sources
-set CXXDEF=%CDEF% -include cxx_compat/pre_cubiomes.h -I"%OPT%\include"
 
-del /q *.o bridge.o 2>nul
-rem Core biome/noise only (no finders/quadbase/loot — unused by this search)
-gcc -std=c17 -O3 %CDEF% -c "%CUB%\generator.c" "%CUB%\layers.c" "%CUB%\biomenoise.c" "%CUB%\biomes.c" "%CUB%\noise.c" "%CUB%\util.c"
+echo [jni] compiling thin bridge
+g++ -std=c++20 -O3 -DNDEBUG -I"%BASE%\include" -I"%INC%" -I"%INCW%" -c NoSlimeFinderBridge.cpp -o "%BJ%\bridge.o"
 if errorlevel 1 exit /b 1
 
-rem SlimeOptimizer submodule: do not modify these sources.
-g++ -std=c++20 -O3 %CXXDEF% -c "%OPT%\src\geometry.cpp"
-if errorlevel 1 exit /b 1
-g++ -std=c++20 -O3 %CXXDEF% -c "%OPT%\src\slime_check.cpp"
-if errorlevel 1 exit /b 1
-g++ -std=c++20 -O3 %CXXDEF% -c "%OPT%\src\java_random.cpp"
+echo [jni] linking libNoSlimeFinderLibJ.dll
+g++ -shared -O3 -o "%OUT%\libNoSlimeFinderLibJ.dll" "%BJ%\bridge.o" "%BASE%\build\lib\libnoslimefinderbase.a" -static -static-libgcc -static-libstdc++ -pthread
 if errorlevel 1 exit /b 1
 
-g++ -std=c++20 -O3 %CXXDEF% -c NoSlimeSearch.cpp
-if errorlevel 1 exit /b 1
-g++ -std=c++20 -O3 %CXXDEF% -c native/jni/com_sunnyslopes_noslimefinder_NoSlimeFinderBridge.cpp -o bridge.o
+copy /y "%BASE%\build\bin\NoSlimeFinderBase-cli.exe" "%OUT%\NoSlimeFinderBase-cli.exe" >nul
 if errorlevel 1 exit /b 1
 
-g++ -shared -O3 -o "%OUT%\libNoSlimeFinderLibJ.dll" generator.o layers.o biomenoise.o biomes.o noise.o util.o geometry.o slime_check.o java_random.o NoSlimeSearch.o bridge.o -static -static-libgcc -static-libstdc++ -pthread
-if errorlevel 1 exit /b 1
-
-copy /y "%OUT%\libNoSlimeFinderLibJ.dll" "%RF%\windows\libNoSlimeFinderLibJ.dll"
 echo Built: %OUT%\libNoSlimeFinderLibJ.dll
-echo Copied to: %RF%\windows\libNoSlimeFinderLibJ.dll
-echo Cubiomes: %CUB%
-echo SlimeOptimizer: %OPT%
+echo Built: %OUT%\NoSlimeFinderBase-cli.exe
+echo Base : %BASE%
 echo JAVA_HOME: %JAVA_HOME%
 exit /b 0
 

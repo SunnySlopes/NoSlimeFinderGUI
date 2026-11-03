@@ -174,7 +174,8 @@ public class NoSlimeFinderSearchRunner {
             }
         } catch (UnsatisfiedLinkError e) {
             if (errorCallback != null) {
-                errorCallback.accept("Native library not loaded. Build with jni/build-jni.bat. "
+                errorCallback.accept("Native library not loaded. Initialize the "
+                    + "NoSlimeFinderBase submodule and build with jni/build-jni.bat. "
                     + e.getMessage());
             }
         } finally {
